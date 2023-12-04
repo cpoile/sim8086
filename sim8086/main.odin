@@ -35,13 +35,13 @@ main :: proc() {
             reg := regW if w else regB
             dst := reg[b & 0b111]
             i += 1 // consume next byte
-            lsb := data[i]
-            msb: u8 = 0
+            lsb := u16(data[i])
+            msb: u16 = 0
             if w {
                 i += 1 // consume next byte
-                msb = data[i]
+                msb = u16(data[i])
             }
-            fmt.sbprintf(&out, "mov %s, %d\n", dst, u16(lsb) + u16(msb) << 8)
+            fmt.sbprintf(&out, "mov %s, %d\n", dst, lsb + msb << 8)
         } else if b >> 2 == rm_to_reg {
             d := b >> 1 & 0b1 == 0b1
             w := b & 0b1 == 0b1
@@ -65,25 +65,21 @@ main :: proc() {
                     continue
                 }
                 ea := make_ea(addr, data[i:], false, false)
-                dst := d ? reg : ea
-                src := d ? ea : reg
+                dst, src := d ? reg : ea, d ? ea : reg
                 fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
             case 0b01:
                 ea := make_ea(addr, data[i+1:], true, false)
-                dst := d ? reg : ea
-                src := d ? ea : reg
+                dst, src := d ? reg : ea, d ? ea : reg
                 fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
                 i += 1 // we consumed one byte
             case 0b10:
                 ea := make_ea(addr, data[i+1:], true, true)
-                dst := d ? reg : ea
-                src := d ? ea : reg
+                dst, src := d ? reg : ea, d ? ea : reg
                 fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
                 i += 2 // we consumed two bytes
             case 0b11:
                 otherReg := regTbl[rm]
-                dst := d ? reg : otherReg
-                src := d ? otherReg : reg
+                dst, src := d ? reg : otherReg, d ? otherReg : reg
                 fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
             }
         } else if b >> 1 == imm_to_rm {
