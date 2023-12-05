@@ -43,45 +43,42 @@ main :: proc() {
             }
             fmt.sbprintf(&out, "mov %s, %d\n", dst, lsb + msb << 8)
         } else if b >> 2 == rm_to_reg {
-            d := b >> 1 & 0b1 == 0b1
+            // if d is 0: reg is src, if d is 1: reg is dst
+            // if d = 0, srcDst[d] = reg and srcDst[(d+1) & 1] = other, id d = 1, srcDst[d] = reg and srcDst[(d+1) & 1] = other
+            // and srcDst[0] is src, srcDst[1] is dst -- always
+            d := b >> 1 & 0b1
+            srcDst := [2]string{}
+
             w := b & 0b1 == 0b1
             regTbl := regW if w else regB
 
             i += 1 // consume next byte
             b := data[i]
 
-            // if d is 0: reg is src, if d is 1: reg is dst
-            reg := regTbl[b >> 3 & 0b111]
+            srcDst[d] = regTbl[b >> 3 & 0b111]
             rm := b & 0b111
-            addr := effAddr[rm]
+             addr := effAddr[rm]
 
             mod := b >> 6
             switch mod {
             case 0b00:
                 if rm == 0b110 {
                     // direct address special case -- ignore the rm and addr, we don't need it
-                    fmt.sbprintf(&out, "mov %s, [%d]\n", reg, u16(data[i+1]) + u16(data[i+2]) << 8)
+                    fmt.sbprintf(&out, "mov %s, [%d]\n", srcDst[d], u16(data[i+1]) + u16(data[i+2]) << 8)
                     i += 2 // we consumed two bytes
                     continue
                 }
-                ea := make_ea(addr, data[i:], false, false)
-                dst, src := d ? reg : ea, d ? ea : reg
-                fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
+                srcDst[(d+1) & 1] = make_ea(addr, data[i:], false, false)
             case 0b01:
-                ea := make_ea(addr, data[i+1:], true, false)
-                dst, src := d ? reg : ea, d ? ea : reg
-                fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
+                srcDst[(d+1) & 1] = make_ea(addr, data[i+1:], true, false)
                 i += 1 // we consumed one byte
             case 0b10:
-                ea := make_ea(addr, data[i+1:], true, true)
-                dst, src := d ? reg : ea, d ? ea : reg
-                fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
+                srcDst[(d+1) & 1] = make_ea(addr, data[i+1:], true, true)
                 i += 2 // we consumed two bytes
             case 0b11:
-                otherReg := regTbl[rm]
-                dst, src := d ? reg : otherReg, d ? otherReg : reg
-                fmt.sbprintf(&out, "mov %s, %s\n", dst, src)
+                srcDst[(d+1) & 1] = regTbl[rm]
             }
+            fmt.sbprintf(&out, "mov %s, %s\n", srcDst[1], srcDst[0])
         } else if b >> 1 == imm_to_rm {
             fmt.println("rm to reg")
         }
