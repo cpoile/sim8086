@@ -3,18 +3,39 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:testing"
 
-regW    :: [8]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}
-regB    :: [8]string{"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"}
+regW :: [8]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}
+regB :: [8]string{"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"}
 effAddr := [8]string{"bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"}
 
 // In order of Table 4-12. 8086 Instruction Encoding
 // MOV
-rm_to_reg  :: 0b100010   // Register/memory to/from register
-imm_to_reg :: 0b1011     // Immediate to register/memory
-imm_to_rm  :: 0b1100011  // Immediate to register
-mem_to_acc :: 0b1010000  // Memory to accumulator
-acc_to_mem :: 0b1010001  // Accumulator to memory
+rm_to_reg :: 0b100010 // Register/memory to/from register
+imm_to_reg :: 0b1011 // Immediate to register/memory
+imm_to_rm :: 0b1100011 // Immediate to register
+mem_to_acc :: 0b1010000 // Memory to accumulator
+acc_to_mem :: 0b1010001 // Accumulator to memory
+
+// ADD
+add_rm_w_reg :: 0b000000
+add_imm_to_reg :: 0b100000 // MOD is 000
+add_imm_to_acc :: 0b0000010
+
+// SUB
+sub_rm_w_reg :: 0b001010
+sub_imm_to_reg :: 0b100000 // MOD is 101
+sub_imm_to_acc :: 0b0010110
+
+// CMP
+cmp_rm_w_reg :: 0b001110
+cmp_imm_to_reg :: 0b100000 // MOD is 111
+cmp_imm_to_acc :: 0b0011110
+
+Error :: enum {
+    None,
+    Bad_Instruction,
+}
 
 main :: proc() {
     if len(os.args) != 3 {
@@ -32,6 +53,15 @@ main :: proc() {
     defer strings.builder_destroy(&out)
     fmt.sbprintln(&out, "bits 16\n")
 
+    err := process_data(&out, data)
+    if err != Error.None {
+        os.exit(1)
+    }
+
+    os.write_entire_file(os.args[2], out.buf[:])
+}
+
+process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
     for i := 0; i < len(data); i += 1 {
         b := data[i]
         if b >> 4 == imm_to_reg {
@@ -45,7 +75,7 @@ main :: proc() {
                 i += 1 // consume next byte
                 msb = u16(data[i])
             }
-            fmt.sbprintf(&out, "mov %s, %d\n", dst, lsb + msb << 8)
+            fmt.sbprintf(out, "mov %s, %d\n", dst, lsb + msb << 8)
         } else if b >> 2 == rm_to_reg {
             // if d is 0: reg is src, if d is 1: reg is dst
             // if d = 0, srcDst[d] = reg and srcDst[(d+1) & 1] = other, id d = 1, srcDst[d] = reg and srcDst[(d+1) & 1] = other
@@ -68,35 +98,35 @@ main :: proc() {
             case 0b00:
                 if rm == 0b110 {
                     // direct address special case -- ignore the rm and addr, we don't need it
-                    fmt.sbprintf(&out, "mov %s, [%d]\n", srcDst[d], u16(data[i+1]) + u16(data[i+2]) << 8)
+                    fmt.sbprintf(out, "mov %s, [%d]\n", srcDst[d], u16(data[i + 1]) + u16(data[i + 2]) << 8)
                     i += 2 // we consumed two bytes
                     continue
                 }
-                srcDst[(d+1) & 1] = make_ea(addr, data[i:], false, false)
+                srcDst[(d + 1) & 1] = make_ea(addr, data[i:], false, false)
             case 0b01:
-                srcDst[(d+1) & 1] = make_ea(addr, data[i+1:], true, false)
+                srcDst[(d + 1) & 1] = make_ea(addr, data[i + 1:], true, false)
                 i += 1 // we consumed one byte
             case 0b10:
-                srcDst[(d+1) & 1] = make_ea(addr, data[i+1:], true, true)
+                srcDst[(d + 1) & 1] = make_ea(addr, data[i + 1:], true, true)
                 i += 2 // we consumed two bytes
             case 0b11:
-                srcDst[(d+1) & 1] = regTbl[rm]
+                srcDst[(d + 1) & 1] = regTbl[rm]
             }
-            fmt.sbprintf(&out, "mov %s, %s\n", srcDst[1], srcDst[0])
+            fmt.sbprintf(out, "mov %s, %s\n", srcDst[1], srcDst[0])
         } else if b >> 1 == mem_to_acc {
             w := b & 0b1
-            fmt.sbprintf(&out, "mov ax, [%d]\n", read_lo_hi(data[i+1:], w))
-            i += w == 1 ? 2 : 1  // consumed bytes
+            fmt.sbprintf(out, "mov ax, [%d]\n", read_lo_hi(data[i + 1:], w))
+            i += w == 1 ? 2 : 1 // consumed bytes
         } else if b >> 1 == acc_to_mem {
             w := b & 0b1
-            fmt.sbprintf(&out, "mov [%d], ax\n", read_lo_hi(data[i+1:], w))
-            i += w == 1 ? 2 : 1  // consumed bytes
+            fmt.sbprintf(out, "mov [%d], ax\n", read_lo_hi(data[i + 1:], w))
+            i += w == 1 ? 2 : 1 // consumed bytes
         } else if b >> 1 == imm_to_rm {
             w := b & 0b1
             regTbl := regW if w == 1 else regB
             i += 1 // consume next byte
 
-            dst : string
+            dst: string
             b := data[i]
             rm := b & 0b111
             addr := effAddr[rm]
@@ -110,25 +140,25 @@ main :: proc() {
                 }
                 dst = make_ea(addr, data[i:], false, false)
             case 0b01:
-                dst = make_ea(addr, data[i+1:], true, false)
+                dst = make_ea(addr, data[i + 1:], true, false)
                 i += 1 // we consumed one byte
             case 0b10:
-                dst = make_ea(addr, data[i+1:], true, true)
+                dst = make_ea(addr, data[i + 1:], true, true)
                 i += 2 // we consumed two bytes
             case 0b11:
                 dst = regTbl[rm]
             }
             // now calculate data, i is our current position
-            imm := read_lo_hi(data[i+1:], w)
-            fmt.sbprintf(&out, "mov %s, %s %d\n", dst, w == 1 ? "word" : "byte", imm)
+            imm := read_lo_hi(data[i + 1:], w)
+            fmt.sbprintf(out, "mov %s, %s %d\n", dst, w == 1 ? "word" : "byte", imm)
             i += w == 1 ? 2 : 1
         } else {
             fmt.printf("found bad instruction: 0b%8b byte #%d, exiting\n", b, i)
-            os.exit(1)
+            return .Bad_Instruction
         }
     }
 
-    os.write_entire_file(os.args[2], out.buf[:])
+    return .None
 }
 
 make_ea :: proc(addr: string, data: []byte, displacement: bool, wide: bool) -> string {
@@ -163,4 +193,57 @@ sign_extend :: proc(b: u8) -> u16 {
         return mask | u16(b)
     }
     return u16(b)
+}
+
+
+//
+// Tests
+//
+
+Case :: struct {
+    bin_filename: string,
+    exp_asm: string,
+}
+
+@(test)
+test_mov :: proc(t: ^testing.T) {
+    //t := &testing.T{}
+    expect :: testing.expect
+    expect_value :: testing.expect_value
+    cases := []Case{
+        {
+            "37",
+            "mov cx, bx\n",
+        },
+        {
+            "38",
+            "mov cx, bx\nmov ch, ah\nmov dx, bx\nmov si, bx\nmov bx, di\nmov al, cl\nmov ch, ch\nmov bx, ax\nmov bx, si\nmov sp, di\nmov bp, ax\n",
+        },
+        {
+            "39",
+            "mov si, bx\nmov dh, al\nmov cl, 12\nmov ch, 244\nmov cx, 12\nmov cx, 65524\nmov dx, 3948\nmov dx, 61588\nmov al, [bx + si]\nmov bx, [bp + di]\nmov dx, [bp]\nmov ah, [bx + si +4]\nmov al, [bx + si +4999]\nmov [bx + di], cx\nmov [bp + si], cl\nmov [bp], ch\n",
+        },
+        {
+            "40",
+            "mov ax, [bx + di -37]\nmov [si -300], cx\nmov dx, [bx -32]\nmov [bp + di], byte 7\nmov [di +901], word 347\nmov bp, [5]\nmov bx, [3458]\nmov ax, [2555]\nmov ax, [16]\nmov [2554], ax\nmov [15], ax\n",
+        },
+    }
+
+    out := strings.builder_make()
+    defer strings.builder_destroy(&out)
+
+    for c in cases {
+        strings.builder_reset(&out)
+        bin, ok := os.read_entire_file_from_filename(c.bin_filename)
+        expect_value(t, ok, true)
+        defer delete(bin)
+
+        err := process_data(&out, bin)
+        expect_value(t, err, Error.None)
+
+        got := strings.to_string(out)
+        expect_value(t, strings.compare(got, c.exp_asm), 0)
+        /* fmt.println(got) */
+        /* fmt.println(c.exp_asm) */
+    }
 }
