@@ -3,7 +3,6 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strings"
-import "core:testing"
 
 regW :: [8]string{"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"}
 regB :: [8]string{"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"}
@@ -64,7 +63,9 @@ main :: proc() {
 process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
     for i := 0; i < len(data); i += 1 {
         b := data[i]
-        if b >> 4 == imm_to_reg {
+
+        switch opcode := b >> 4; opcode {
+        case imm_to_reg:
             w := b >> 3 & 0b1
             regTbl := regW if w == 1 else regB
             dst := regTbl[b & 0b111]
@@ -76,7 +77,19 @@ process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
                 msb = u16(data[i])
             }
             fmt.sbprintf(out, "mov %s, %d\n", dst, lsb + msb << 8)
-        } else if b >> 2 == rm_to_reg {
+            continue
+        }
+
+        switch opcode := b >> 2; opcode {
+        case rm_to_reg, add_rm_w_reg:
+            opname: string
+            switch opcode {
+            case rm_to_reg:
+                opname = "mov"
+            case add_rm_w_reg:
+                opname = "add"
+            }
+
             // if d is 0: reg is src, if d is 1: reg is dst
             // if d = 0, srcDst[d] = reg and srcDst[(d+1) & 1] = other, id d = 1, srcDst[d] = reg and srcDst[(d+1) & 1] = other
             // and srcDst[0] is src, srcDst[1] is dst -- always
@@ -98,7 +111,7 @@ process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
             case 0b00:
                 if rm == 0b110 {
                     // direct address special case -- ignore the rm and addr, we don't need it
-                    fmt.sbprintf(out, "mov %s, [%d]\n", srcDst[d], u16(data[i + 1]) + u16(data[i + 2]) << 8)
+                    fmt.sbprintf(out, "%s %s, [%d]\n", opname, srcDst[d], u16(data[i + 1]) + u16(data[i + 2]) << 8)
                     i += 2 // we consumed two bytes
                     continue
                 }
@@ -112,16 +125,22 @@ process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
             case 0b11:
                 srcDst[(d + 1) & 1] = regTbl[rm]
             }
-            fmt.sbprintf(out, "mov %s, %s\n", srcDst[1], srcDst[0])
-        } else if b >> 1 == mem_to_acc {
+            fmt.sbprintf(out, "%s %s, %s\n", opname, srcDst[1], srcDst[0])
+            continue
+        }
+
+        switch opcode := b >> 1; opcode {
+        case mem_to_acc:
             w := b & 0b1
             fmt.sbprintf(out, "mov ax, [%d]\n", read_lo_hi(data[i + 1:], w))
             i += w == 1 ? 2 : 1 // consumed bytes
-        } else if b >> 1 == acc_to_mem {
+            continue
+        case acc_to_mem:
             w := b & 0b1
             fmt.sbprintf(out, "mov [%d], ax\n", read_lo_hi(data[i + 1:], w))
             i += w == 1 ? 2 : 1 // consumed bytes
-        } else if b >> 1 == imm_to_rm {
+            continue
+        case imm_to_rm:
             w := b & 0b1
             regTbl := regW if w == 1 else regB
             i += 1 // consume next byte
@@ -152,10 +171,11 @@ process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
             imm := read_lo_hi(data[i + 1:], w)
             fmt.sbprintf(out, "mov %s, %s %d\n", dst, w == 1 ? "word" : "byte", imm)
             i += w == 1 ? 2 : 1
-        } else {
-            fmt.printf("found bad instruction: 0b%8b byte #%d, exiting\n", b, i)
-            return .Bad_Instruction
+            continue
         }
+
+        fmt.printf("found bad instruction: 0b%8b byte #%d, exiting\n", b, i)
+        return .Bad_Instruction
     }
 
     return .None
