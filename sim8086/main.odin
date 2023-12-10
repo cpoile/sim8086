@@ -90,42 +90,10 @@ process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
                 opname = "add"
             }
 
-            // if d is 0: reg is src, if d is 1: reg is dst
-            // if d = 0, srcDst[d] = reg and srcDst[(d+1) & 1] = other, id d = 1, srcDst[d] = reg and srcDst[(d+1) & 1] = other
-            // and srcDst[0] is src, srcDst[1] is dst -- always
-            d := b >> 1 & 0b1
-            srcDst := [2]string{}
+            dst, src, inc := get_rm_to_reg(data[i:])
+            i += inc
 
-            w := b & 0b1
-            regTbl := regW if w == 1 else regB
-
-            i += 1 // consume next byte
-            b := data[i]
-
-            srcDst[d] = regTbl[b >> 3 & 0b111]
-            rm := b & 0b111
-            addr := effAddr[rm]
-
-            mod := b >> 6
-            switch mod {
-            case 0b00:
-                if rm == 0b110 {
-                    // direct address special case -- ignore the rm and addr, we don't need it
-                    fmt.sbprintf(out, "%s %s, [%d]\n", opname, srcDst[d], u16(data[i + 1]) + u16(data[i + 2]) << 8)
-                    i += 2 // we consumed two bytes
-                    continue
-                }
-                srcDst[(d + 1) & 1] = make_ea(addr, data[i:], false, false)
-            case 0b01:
-                srcDst[(d + 1) & 1] = make_ea(addr, data[i + 1:], true, false)
-                i += 1 // we consumed one byte
-            case 0b10:
-                srcDst[(d + 1) & 1] = make_ea(addr, data[i + 1:], true, true)
-                i += 2 // we consumed two bytes
-            case 0b11:
-                srcDst[(d + 1) & 1] = regTbl[rm]
-            }
-            fmt.sbprintf(out, "%s %s, %s\n", opname, srcDst[1], srcDst[0])
+            fmt.sbprintf(out, "%s %s, %s\n", opname, dst, src)
             continue
         }
 
@@ -179,6 +147,47 @@ process_data :: proc(out: ^strings.Builder, data: []byte) -> Error {
     }
 
     return .None
+}
+
+get_rm_to_reg :: proc(data: []byte) -> (dst, src: string, i: int) {
+    b := data[0]
+
+    // if d is 0: reg is src, if d is 1: reg is dst
+    // if d = 0, srcDst[d] = reg and srcDst[(d+1) & 1] = other, id d = 1, srcDst[d] = reg and srcDst[(d+1) & 1] = other
+    // and srcDst[0] is src, srcDst[1] is dst -- always
+    d := b >> 1 & 0b1
+    srcDst := [2]string{}
+
+    w := b & 0b1
+    regTbl := regW if w == 1 else regB
+
+    i += 1 // consume next byte
+    b = data[i]
+
+    srcDst[d] = regTbl[b >> 3 & 0b111]
+    rm := b & 0b111
+    addr := effAddr[rm]
+
+    mod := b >> 6
+    switch mod {
+    case 0b00:
+        if rm == 0b110 {
+            // direct address special case -- ignore the rm and addr, we don't need it
+            // fmt.sbprintf(out, "%s %s, [%d]\n", opname, srcDst[d], u16(data[i + 1]) + u16(data[i + 2]) << 8)
+            return srcDst[d], fmt.tprintf("[%d]", u16(data[i + 1]) + u16(data[i + 2]) << 8), i + 2 // consumed 2 more bytes
+        }
+        srcDst[(d + 1) & 1] = make_ea(addr, data[i:], false, false)
+    case 0b01:
+        srcDst[(d + 1) & 1] = make_ea(addr, data[i + 1:], true, false)
+        i += 1 // we consumed one more byte
+    case 0b10:
+        srcDst[(d + 1) & 1] = make_ea(addr, data[i + 1:], true, true)
+        i += 2 // we consumed two more bytes
+    case 0b11:
+        srcDst[(d + 1) & 1] = regTbl[rm]
+    }
+
+    return srcDst[1], srcDst[0], i
 }
 
 make_ea :: proc(addr: string, data: []byte, displacement: bool, wide: bool) -> string {
